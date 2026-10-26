@@ -1,0 +1,16 @@
+# Policy values (R20). The service reads these from the `policy` table, never from code.
+# Defaults come from the Build Brief. Durations are in minutes unless the key says otherwise.
+time_grid_minutes: 30
+duration_min_minutes: 30
+duration_max_minutes: 180
+booking_horizon_days: 14
+weekly_limit: 5                    # bookings per calendar week (Monday to Sunday, campus time)
+reminder_minutes_before: 60        # allowed range 30 to 60
+checkin_opens_minutes_before: 10
+checkin_closes_minutes_after: 15   # after this, the booking becomes a no-show
+no_show_threshold: 3               # no-shows within the window below trigger a suspension
+no_show_window_days: 30
+suspension_days: 7
+just_released_hours: 2             # or until the slot starts
+available_soon_hours: 2
+search_staleness_seconds: 5        # search may be this old; booking is always exact

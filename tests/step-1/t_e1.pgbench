@@ -1,0 +1,10 @@
+-- T-E1  Fifty students, one slot, at the same moment.
+-- Run by scripts/check-step1.sh with 50 parallel clients, one transaction each.
+-- The short sleep keeps the winning transaction open, so the other 49 collide with it.
+BEGIN;
+INSERT INTO bookings (room_id, student_id, during, purpose, status, idempotency_key)
+VALUES ('00000000-0000-4000-8000-0000000000a1', 'T-STUDENT-' || :client_id,
+        tstzrange('2030-01-02 10:00+00', '2030-01-02 11:00+00', '[)'),
+        'T-E1', 'CONFIRMED', gen_random_uuid());
+SELECT pg_sleep(0.3);
+COMMIT;

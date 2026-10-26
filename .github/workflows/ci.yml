@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install validators
+        run: pip install pyyaml openapi-spec-validator
+      - name: Validate spec and data files
+        run: |
+          python - <<'PY'
+          import yaml
+          from openapi_spec_validator import validate
+          validate(yaml.safe_load(open("spec/openapi.yaml")))
+          yaml.safe_load(open("spec/policy.yaml"))
+          yaml.safe_load(open("tests/acceptance/acceptance-tests.yaml"))
+          print("contract files valid")
+          PY
+      - name: Shell syntax check
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+
+  check-step1:
+    runs-on: ubuntu-latest
+    # Runs only once someone has added schema files to db/migrations/.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: reservations
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client postgresql-contrib
+      - name: Apply schema and run the Step 1 checks
+        run: |
+          if ls db/migrations/*.sql >/dev/null 2>&1; then
+            ./scripts/apply-schema.sh
+            ./scripts/check-step1.sh
+          else
+            echo "No migrations yet. Step 1 not started; skipping."
+          fi

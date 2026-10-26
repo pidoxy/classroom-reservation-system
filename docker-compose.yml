@@ -1,0 +1,24 @@
+# A local PostgreSQL 16 for building and testing, whatever language you use.
+# Throwaway credentials, for local development only. Never reuse them anywhere real.
+services:
+  db:
+    image: postgres:16
+    container_name: reservations-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reservations
+    ports:
+      - "5432:5432"
+    volumes:
+      - reservations-data:/var/lib/postgresql/data
+      - ./tests:/tests:ro
+      - ./db:/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d reservations"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  reservations-data:

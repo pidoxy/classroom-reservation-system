@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+# JavaScript
+node_modules/
+# Environment and secrets: never commit these
+.env
+.env.*
+!.env.example
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+# Local database data
+pgdata/

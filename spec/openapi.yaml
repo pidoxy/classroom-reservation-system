@@ -1,0 +1,390 @@
+openapi: 3.0.3
+info:
+  title: Classroom Reservation API
+  version: 0.1.0
+  description: |
+    The interface from the Build Brief (docs/brief/interfaces.md), written so any language can
+    implement or call it. Times are ISO 8601 with offset. Every call carries the SSO token in the
+    Authorization header, and any call can also answer 401 UNAUTHENTICATED or 503 SERVICE_UNAVAILABLE.
+
+    Every refusal uses the same body: `{ "error": "<CODE>", "message": "...", "details": { ... } }`.
+    The `error` code is the contract. The `message` is for humans and may change.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: http://localhost:8000
+    description: Local development
+security:
+  - ssoToken: []
+tags:
+  - name: Rooms
+  - name: Bookings
+  - name: Me
+  - name: Announcements
+
+paths:
+  /rooms/search:
+    get:
+      tags: [Rooms]
+      operationId: searchRooms
+      summary: Rooms free for the whole requested range
+      description: May be served from the read replica, so results can be up to 5 seconds old. See `as_of`.
+      parameters:
+        - { name: date, in: query, required: true, schema: { type: string, format: date } }
+        - { name: start, in: query, required: true, schema: { type: string, format: time }, description: 'Start time of day on the date (campus local time).' }
+        - { name: end, in: query, required: true, schema: { type: string, format: time } }
+        - { name: min_capacity, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/RoomType' } }
+        - { name: name, in: query, schema: { type: string } }
+        - name: amenities
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - { name: purpose, in: query, schema: { type: string } }
+        - { name: near_building, in: query, schema: { type: string } }
+        - { name: duration, in: query, schema: { type: integer, description: Minutes } }
+      responses:
+        '200':
+          description: Rooms free for the whole range
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rooms, as_of]
+                properties:
+                  rooms:
+                    type: array
+                    items: { $ref: '#/components/schemas/RoomResult' }
+                  as_of: { type: string, format: date-time }
+        '400':
+          description: INVALID_RANGE, OUT_OF_HORIZON or UNKNOWN_FILTER
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /rooms/available-soon:
+    get:
+      tags: [Rooms]
+      operationId: availableSoon
+      summary: Rooms free now or soon, soonest first
+      parameters:
+        - { name: within, in: query, schema: { type: integer, minimum: 1, maximum: 120, default: 120 }, description: Minutes ahead. }
+        - { name: near_building, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Rooms free now or within the window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rooms, as_of]
+                properties:
+                  rooms:
+                    type: array
+                    items: { $ref: '#/components/schemas/RoomResult' }
+                  as_of: { type: string, format: date-time }
+        '400':
+          description: INVALID_WINDOW
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /rooms/released:
+    get:
+      tags: [Rooms]
+      operationId: justReleased
+      summary: Slots freed by cancel or no-show, newest first
+      parameters:
+        - { name: near_building, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Released slots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [slots]
+                properties:
+                  slots:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReleasedSlot' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      operationId: book
+      summary: Book one room for one time range
+      description: |
+        Confirmed at once if every rule passes. A repeat with the same Idempotency-Key and the same
+        body returns the first booking with status 200. The same key with a different body is refused.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_id, start, end]
+              properties:
+                room_id: { type: string, format: uuid }
+                start: { type: string, format: date-time }
+                end: { type: string, format: date-time }
+                purpose: { type: string }
+      responses:
+        '201':
+          description: Booking confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '200':
+          description: Repeat of an earlier request with the same key; the same booking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '403':
+          description: SUSPENDED. `details.suspended_until` holds the end date.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: ROOM_NOT_FOUND (unknown or inactive room)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: SLOT_TAKEN or ALREADY_BOOKED_THIS_ROOM
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: |
+            WEEKLY_LIMIT_REACHED (`details` holds used, limit, resets_at), OFF_GRID,
+            DURATION_NOT_ALLOWED, OUTSIDE_OPENING_HOURS, IN_PAST, OUT_OF_HORIZON,
+            or IDEMPOTENCY_KEY_REUSED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /bookings/{id}/cancel:
+    post:
+      tags: [Bookings]
+      operationId: cancel
+      summary: Cancel your own booking before it starts
+      description: Repeating a cancel on an already cancelled booking returns 200 with the same result.
+      parameters:
+        - { $ref: '#/components/parameters/BookingId' }
+      responses:
+        '200':
+          description: Booking is CANCELLED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '404':
+          description: NOT_FOUND. No such booking, or not yours; the two are not told apart.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: ALREADY_STARTED or NOT_CANCELLABLE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /bookings/{id}/check-in:
+    post:
+      tags: [Bookings]
+      operationId: checkIn
+      summary: Check in from 10 minutes before to 15 minutes after the start
+      description: Repeating a check-in returns 200 with the same result.
+      parameters:
+        - { $ref: '#/components/parameters/BookingId' }
+      responses:
+        '200':
+          description: Booking is CHECKED_IN
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        '404':
+          description: NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: TOO_EARLY, RELEASED or NOT_ACTIVE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /me/bookings:
+    get:
+      tags: [Me]
+      operationId: myBookings
+      summary: Your own bookings, soonest first
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [upcoming, past] }
+      responses:
+        '200':
+          description: Your bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookings]
+                properties:
+                  bookings:
+                    type: array
+                    items: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /me/standing:
+    get:
+      tags: [Me]
+      operationId: myStanding
+      summary: Bookings used this week, the limit, recent no-shows and any suspension
+      responses:
+        '200':
+          description: Your standing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Standing' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  /announcements:
+    get:
+      tags: [Announcements]
+      operationId: announcements
+      summary: Current and upcoming downtime notices
+      responses:
+        '200':
+          description: Notices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [announcements]
+                properties:
+                  announcements:
+                    type: array
+                    items: { $ref: '#/components/schemas/Announcement' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+components:
+  securitySchemes:
+    ssoToken:
+      type: http
+      scheme: bearer
+      description: |
+        Signed token from the university single sign-on. It carries the student id. The service
+        takes the student id from the token only and ignores any student id in a request body.
+  parameters:
+    BookingId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Unauthenticated:
+      description: UNAUTHENTICATED. The token is missing or expired.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: SERVICE_UNAVAILABLE. Safe to retry later with the same Idempotency-Key.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    RoomType:
+      type: string
+      enum: [study, seminar, other]
+    BookingStatus:
+      type: string
+      enum: [CONFIRMED, CANCELLED, CHECKED_IN, NO_SHOW, COMPLETED]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: The stable, machine-readable refusal code.
+          example: SLOT_TAKEN
+        message: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+    RoomResult:
+      type: object
+      required: [room_id, code, name, building, capacity]
+      properties:
+        room_id: { type: string, format: uuid }
+        code: { type: string, example: ENG-201 }
+        name: { type: string }
+        type: { $ref: '#/components/schemas/RoomType' }
+        capacity: { type: integer }
+        building: { type: string }
+        distance_m: { type: number, nullable: true, description: Distance from near_building when given. }
+        amenities:
+          type: array
+          items: { type: string }
+        free_from: { type: string, format: date-time, nullable: true }
+    ReleasedSlot:
+      type: object
+      required: [room_id, start, end, released_at]
+      properties:
+        room_id: { type: string, format: uuid }
+        code: { type: string }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        released_at: { type: string, format: date-time }
+    Booking:
+      type: object
+      required: [booking_id, room_id, start, end, status]
+      properties:
+        booking_id: { type: string, format: uuid }
+        room_id: { type: string, format: uuid }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        purpose: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        checked_in_at: { type: string, format: date-time, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    Standing:
+      type: object
+      required: [used_this_week, weekly_limit, no_shows_30d]
+      properties:
+        used_this_week: { type: integer }
+        weekly_limit: { type: integer }
+        no_shows_30d: { type: integer }
+        suspended_until: { type: string, format: date-time, nullable: true }
+    Announcement:
+      type: object
+      required: [announcement_id, starts_at, ends_at, message]
+      properties:
+        announcement_id: { type: string }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        message: { type: string }

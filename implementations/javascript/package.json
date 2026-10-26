@@ -1,0 +1,13 @@
+{
+  "name": "reservation-javascript-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Connection check and starting point for a JavaScript implementation.",
+  "scripts": {
+    "check-db": "node check-db.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "pg": "^8.12.0" },
+  "license": "MIT"
+}
